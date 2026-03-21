@@ -26,6 +26,7 @@ STATE_FILE = Path("last_seen_news.json")
 NEWS_SOURCES = [
     {"name": "Chess.com News", "url": "https://www.chess.com/rss/news"},
     {"name": "FIDE", "url": "https://www.fide.com/feed/"},
+    {"name": "Chessbase", "url": "https://en.chessbase.com/feed"},
 ]
 
 
