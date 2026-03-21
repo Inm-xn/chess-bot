@@ -13,12 +13,12 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
  
  
 # =========================
-# Настройки (вставьте свои значения)
+# Настройки
 # =========================
 TOKEN = "8758955979:AAGrNafupgnJ7_9JveAzYQ28n3nyKJbJYmU"
 ADMIN_ID = 6626734308
 CHANNEL_ID = -1003585416242
-DEEPL_API_KEY = "8fd00432-7185-496b-bc0f-ba128a4ef8a8:fx"  # <-- сюда вставьте API ключ DeepL
+DEEPL_API_KEY = "8fd00432-7185-496b-bc0f-ba128a4ef8a8:fx"
  
 STATE_FILE = Path("last_seen_news.json")
  
@@ -48,6 +48,7 @@ class NewsItem:
     title: str
     link: str
     source_name: str
+    image_url: Optional[str]
  
  
 PENDING: Dict[str, NewsItem] = {}
@@ -91,6 +92,37 @@ def format_post(item: NewsItem, translated_title: str) -> str:
     )
  
  
+def extract_image_url(entry: Any) -> Optional[str]:
+    """Пытается найти картинку в записи RSS."""
+    # 1. media_content
+    media = getattr(entry, "media_content", None)
+    if media and isinstance(media, list):
+        for m in media:
+            url = m.get("url", "")
+            if url and any(url.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp"]):
+                return url
+ 
+    # 2. media_thumbnail
+    thumb = getattr(entry, "media_thumbnail", None)
+    if thumb and isinstance(thumb, list) and thumb[0].get("url"):
+        return thumb[0]["url"]
+ 
+    # 3. enclosures
+    enclosures = getattr(entry, "enclosures", None)
+    if enclosures:
+        for enc in enclosures:
+            if "image" in enc.get("type", ""):
+                return enc.get("href") or enc.get("url")
+ 
+    # 4. links с type image
+    links = getattr(entry, "links", [])
+    for link in links:
+        if "image" in link.get("type", ""):
+            return link.get("href")
+ 
+    return None
+ 
+ 
 def load_state() -> Dict[str, Optional[str]]:
     if not STATE_FILE.exists():
         return {}
@@ -120,9 +152,10 @@ def entry_to_item(entry: Any, source_name: str) -> Optional[NewsItem]:
     link = get_entry_field(entry, "link", "links", "id")
     if not title or not link:
         return None
+    image_url = extract_image_url(entry)
     raw_id = f"{source_name}|{title}|{link}"
     key = _make_key(raw_id)
-    return NewsItem(key=key, title=title, link=link, source_name=source_name)
+    return NewsItem(key=key, title=title, link=link, source_name=source_name, image_url=image_url)
  
  
 async def fetch_feed(url: str) -> Any:
@@ -164,7 +197,17 @@ async def handle_publish(callback: CallbackQuery, bot: Bot) -> None:
         await callback.answer("Не найдено (возможно, бот перезапускался).", show_alert=True)
         return
     translated_title = await translate_to_russian(item.title)
-    await bot.send_message(CHANNEL_ID, format_post(item, translated_title))
+    caption = format_post(item, translated_title)
+ 
+    if item.image_url:
+        try:
+            await bot.send_photo(CHANNEL_ID, photo=item.image_url, caption=caption)
+        except Exception:
+            logger.exception("Не удалось отправить фото, отправляем текст.")
+            await bot.send_message(CHANNEL_ID, caption)
+    else:
+        await bot.send_message(CHANNEL_ID, caption)
+ 
     await callback.answer("Опубликовано")
     await safe_clear_keyboard(callback)
  
@@ -218,10 +261,10 @@ async def poll_once(bot: Bot, state: Dict[str, Optional[str]]) -> None:
         for item in unseen_items:
             async with PENDING_LOCK:
                 PENDING[item.key] = item
-            # Показываем админу оригинал + перевод для предпросмотра
             translated_title = await translate_to_russian(item.title)
+            image_info = "🖼 Есть картинка" if item.image_url else "📄 Без картинки"
             preview_text = (
-                f"📰 Новая новость!\n\n"
+                f"📰 Новая новость! {image_info}\n\n"
                 f"🇬🇧 {item.title}\n"
                 f"🇷🇺 {translated_title}\n\n"
                 f"🌐 {source_name}\n"
