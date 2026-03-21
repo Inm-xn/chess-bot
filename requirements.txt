@@ -1,3 +1,2 @@
-aiogram==3.7.0
-feedparser==6.0.11
-pydantic==1.10.13
+aiogram==3.26.0
+feedparser==6.0.12
