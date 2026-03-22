@@ -33,6 +33,8 @@ NEWS_SOURCES = [
     {"name": "Chess.com News", "url": "https://www.chess.com/rss/news"},
     {"name": "FIDE", "url": "https://www.fide.com/feed/"},
     {"name": "Chessbase", "url": "https://en.chessbase.com/feed"},
+    {"name": "Chessdom", "url": "https://chessdom.com/feed"},
+    {"name": "The Week in Chess", "url": "https://theweekinchess.com/twic-rss-feed"},
 ]
  
  
