@@ -18,7 +18,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 TOKEN = "8758955979:AAGrNafupgnJ7_9JveAzYQ28n3nyKJbJYmU"
 ADMIN_ID = 6626734308
 CHANNEL_ID = -1003585416242
-DEEPL_API_KEY = "8fd00432-7185-496b-bc0f-ba128a4ef8a8:fx"
+DEEPL_API_KEY = "9c699384-f4bb-43be-b0e7-39d58d6748c6:fx"
  
 STATE_FILE = Path("last_seen_news.json")
  
