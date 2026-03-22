@@ -49,6 +49,7 @@ class NewsItem:
     link: str
     source_name: str
     image_url: Optional[str]
+    summary: Optional[str]
  
  
 PENDING: Dict[str, NewsItem] = {}
@@ -87,17 +88,44 @@ def _make_key(raw: str) -> str:
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
  
  
-def format_post(item: NewsItem, translated_title: str) -> str:
-    return (
-        f"♟ {translated_title}\n\n"
-        f"🌐 {item.source_name}\n"
-        f"👉 {item.link}"
-    )
+def clean_html(text: str) -> str:
+    """Убирает HTML теги из текста."""
+    import re
+    clean = re.sub(r'<[^>]+>', '', text)
+    clean = clean.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>').replace('&quot;', '"')
+    return clean.strip()
+ 
+ 
+def get_hashtags(source_name: str) -> str:
+    tags = "#шахматы #chess #новости"
+    if "Chess.com" in source_name:
+        tags += " #chessdotcom"
+    elif "FIDE" in source_name:
+        tags += " #FIDE"
+    elif "Chessbase" in source_name:
+        tags += " #chessbase"
+    return tags
+ 
+ 
+def format_post(item: NewsItem, translated_title: str, translated_summary: Optional[str]) -> str:
+    from datetime import datetime
+    date = datetime.now().strftime("%d.%m.%Y")
+    hashtags = get_hashtags(item.source_name)
+ 
+    text = f"♟ *{translated_title}*\n\n"
+ 
+    if translated_summary:
+        text += f"{translated_summary}\n\n"
+ 
+    text += f"📅 {date}\n"
+    text += f"🌐 {item.source_name}\n"
+    text += f"👉 [Читать полностью]({item.link})\n\n"
+    text += hashtags
+ 
+    return text
  
  
 def extract_image_url(entry: Any) -> Optional[str]:
-    """Пытается найти картинку в записи RSS."""
-    # 1. media_content
     media = getattr(entry, "media_content", None)
     if media and isinstance(media, list):
         for m in media:
@@ -105,24 +133,33 @@ def extract_image_url(entry: Any) -> Optional[str]:
             if url and any(url.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp"]):
                 return url
  
-    # 2. media_thumbnail
     thumb = getattr(entry, "media_thumbnail", None)
     if thumb and isinstance(thumb, list) and thumb[0].get("url"):
         return thumb[0]["url"]
  
-    # 3. enclosures
     enclosures = getattr(entry, "enclosures", None)
     if enclosures:
         for enc in enclosures:
             if "image" in enc.get("type", ""):
                 return enc.get("href") or enc.get("url")
  
-    # 4. links с type image
     links = getattr(entry, "links", [])
     for link in links:
         if "image" in link.get("type", ""):
             return link.get("href")
  
+    return None
+ 
+ 
+def extract_summary(entry: Any) -> Optional[str]:
+    """Берёт краткое описание из RSS."""
+    summary = getattr(entry, "summary", None) or getattr(entry, "description", None)
+    if summary:
+        cleaned = clean_html(summary)
+        # Обрезаем до 300 символов
+        if len(cleaned) > 300:
+            cleaned = cleaned[:300].rsplit(' ', 1)[0] + "..."
+        return cleaned if cleaned else None
     return None
  
  
@@ -156,9 +193,10 @@ def entry_to_item(entry: Any, source_name: str) -> Optional[NewsItem]:
     if not title or not link:
         return None
     image_url = extract_image_url(entry)
+    summary = extract_summary(entry)
     raw_id = f"{source_name}|{title}|{link}"
     key = _make_key(raw_id)
-    return NewsItem(key=key, title=title, link=link, source_name=source_name, image_url=image_url)
+    return NewsItem(key=key, title=title, link=link, source_name=source_name, image_url=image_url, summary=summary)
  
  
 async def fetch_feed(url: str) -> Any:
@@ -199,17 +237,22 @@ async def handle_publish(callback: CallbackQuery, bot: Bot) -> None:
     if not item:
         await callback.answer("Не найдено (возможно, бот перезапускался).", show_alert=True)
         return
+ 
     translated_title = await translate_to_russian(item.title)
-    caption = format_post(item, translated_title)
+    translated_summary = None
+    if item.summary:
+        translated_summary = await translate_to_russian(item.summary)
+ 
+    caption = format_post(item, translated_title, translated_summary)
  
     if item.image_url:
         try:
-            await bot.send_photo(CHANNEL_ID, photo=item.image_url, caption=caption)
+            await bot.send_photo(CHANNEL_ID, photo=item.image_url, caption=caption, parse_mode="Markdown")
         except Exception:
             logger.exception("Не удалось отправить фото, отправляем текст.")
-            await bot.send_message(CHANNEL_ID, caption)
+            await bot.send_message(CHANNEL_ID, caption, parse_mode="Markdown")
     else:
-        await bot.send_message(CHANNEL_ID, caption)
+        await bot.send_message(CHANNEL_ID, caption, parse_mode="Markdown")
  
     await callback.answer("Опубликовано")
     await safe_clear_keyboard(callback)
@@ -266,10 +309,12 @@ async def poll_once(bot: Bot, state: Dict[str, Optional[str]]) -> None:
                 PENDING[item.key] = item
             translated_title = await translate_to_russian(item.title)
             image_info = "🖼 Есть картинка" if item.image_url else "📄 Без картинки"
+            summary_info = f"\n\n📝 {item.summary[:150]}..." if item.summary else ""
             preview_text = (
                 f"📰 Новая новость! {image_info}\n\n"
                 f"🇬🇧 {item.title}\n"
-                f"🇷🇺 {translated_title}\n\n"
+                f"🇷🇺 {translated_title}"
+                f"{summary_info}\n\n"
                 f"🌐 {source_name}\n"
                 f"👉 {item.link}"
             )
