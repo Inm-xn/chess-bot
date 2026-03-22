@@ -63,9 +63,12 @@ async def translate_to_russian(text: str) -> str:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "https://api-free.deepl.com/v2/translate",
-                data={
-                    "auth_key": DEEPL_API_KEY,
-                    "text": text,
+                headers={
+                    "Authorization": f"DeepL-Auth-Key {DEEPL_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "text": [text],
                     "target_lang": "RU",
                 },
                 timeout=10,
