@@ -6,19 +6,18 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
- 
+
 import feedparser
 import httpx
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
-    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
-    Message, PhotoSize
+    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
- 
- 
+
+
 # =========================
 # Настройки
 # =========================
@@ -26,9 +25,9 @@ TOKEN = "8758955979:AAGrNafupgnJ7_9JveAzYQ28n3nyKJbJYmU"
 ADMIN_ID = 6626734308
 CHANNEL_ID = -1003585416242
 DEEPL_API_KEY = "9c699384-f4bb-43be-b0e7-39d58d6748c6:fx"
- 
+
 STATE_FILE = Path("last_seen_news.json")
- 
+
 NEWS_SOURCES = [
     {"name": "Chess.com News", "url": "https://www.chess.com/rss/news"},
     {"name": "FIDE", "url": "https://www.fide.com/feed/"},
@@ -36,8 +35,8 @@ NEWS_SOURCES = [
     {"name": "Chessdom", "url": "https://chessdom.com/feed"},
     {"name": "The Week in Chess", "url": "https://theweekinchess.com/twic-rss-feed"},
 ]
- 
- 
+
+
 # =========================
 # Логирование
 # =========================
@@ -46,8 +45,8 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 logger = logging.getLogger("news-bot")
- 
- 
+
+
 # =========================
 # FSM состояния
 # =========================
@@ -55,8 +54,8 @@ class EditStates(StatesGroup):
     waiting_for_photo = State()
     waiting_for_title = State()
     waiting_for_comment = State()
- 
- 
+
+
 # =========================
 # Модели
 # =========================
@@ -71,12 +70,12 @@ class NewsItem:
     custom_title: Optional[str] = None
     custom_comment: Optional[str] = None
     custom_photo: Optional[str] = None
- 
- 
+
+
 PENDING: Dict[str, NewsItem] = {}
 PENDING_LOCK = asyncio.Lock()
- 
- 
+
+
 # =========================
 # Перевод через DeepL
 # =========================
@@ -100,21 +99,21 @@ async def translate_to_russian(text: str) -> str:
     except Exception:
         logger.exception("Ошибка перевода DeepL, возвращаем оригинал.")
         return text
- 
- 
+
+
 # =========================
 # Вспомогательные функции
 # =========================
 def _make_key(raw: str) -> str:
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
- 
- 
+
+
 def clean_html(text: str) -> str:
     clean = re.sub(r'<[^>]+>', '', text)
     clean = clean.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>').replace('&quot;', '"')
     return clean.strip()
- 
- 
+
+
 def get_hashtags(source_name: str) -> str:
     tags = "#шахматы #chess #новости"
     if "Chess.com" in source_name:
@@ -124,30 +123,38 @@ def get_hashtags(source_name: str) -> str:
     elif "Chessbase" in source_name:
         tags += " #chessbase"
     return tags
- 
- 
-def format_post(item: NewsItem, translated_title: str, translated_summary: Optional[str]) -> str:
+
+
+def escape_markdown(text: str) -> str:
+    """Убирает спецсимволы Markdown чтобы не ломался форматирование."""
+    chars = ['*', '_', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    for ch in chars:
+        text = text.replace(ch, '')
+    return text
+
+
+def format_post(item: "NewsItem", translated_title: str, translated_summary: Optional[str]) -> str:
     from datetime import datetime
     date = datetime.now().strftime("%d.%m.%Y")
     hashtags = get_hashtags(item.source_name)
- 
-    title = item.custom_title or translated_title
-    text = f"♟ *{title}*\n\n"
- 
+
+    title = escape_markdown(item.custom_title or translated_title)
+    text = f"♟ {title}\n\n"
+
     if item.custom_comment:
-        text += f"💬 _{item.custom_comment}_\n\n"
- 
+        text += f"💬 {item.custom_comment}\n\n"
+
     if translated_summary:
-        text += f"{translated_summary}\n\n"
- 
+        text += f"{escape_markdown(translated_summary)}\n\n"
+
     text += f"📅 {date}\n"
     text += f"🌐 {item.source_name}\n"
-    text += f"👉 [Читать полностью]({item.link})\n\n"
+    text += f"👉 {item.link}\n\n"
     text += hashtags
- 
+
     return text
- 
- 
+
+
 def build_admin_keyboard(key: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Опубликовать", callback_data=f"publish:{key}")],
@@ -156,8 +163,8 @@ def build_admin_keyboard(key: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="💬 Добавить комментарий", callback_data=f"comment:{key}")],
         [InlineKeyboardButton(text="❌ Пропустить", callback_data=f"skip:{key}")],
     ])
- 
- 
+
+
 def extract_image_url(entry: Any) -> Optional[str]:
     media = getattr(entry, "media_content", None)
     if media and isinstance(media, list):
@@ -165,25 +172,25 @@ def extract_image_url(entry: Any) -> Optional[str]:
             url = m.get("url", "")
             if url and any(url.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp"]):
                 return url
- 
+
     thumb = getattr(entry, "media_thumbnail", None)
     if thumb and isinstance(thumb, list) and thumb[0].get("url"):
         return thumb[0]["url"]
- 
+
     enclosures = getattr(entry, "enclosures", None)
     if enclosures:
         for enc in enclosures:
             if "image" in enc.get("type", ""):
                 return enc.get("href") or enc.get("url")
- 
+
     links = getattr(entry, "links", [])
     for link in links:
         if "image" in link.get("type", ""):
             return link.get("href")
- 
+
     return None
- 
- 
+
+
 def extract_summary(entry: Any) -> Optional[str]:
     summary = getattr(entry, "summary", None) or getattr(entry, "description", None)
     if summary:
@@ -192,8 +199,8 @@ def extract_summary(entry: Any) -> Optional[str]:
             cleaned = cleaned[:300].rsplit(' ', 1)[0] + "..."
         return cleaned if cleaned else None
     return None
- 
- 
+
+
 def load_state() -> Dict[str, Optional[str]]:
     if not STATE_FILE.exists():
         return {}
@@ -204,20 +211,20 @@ def load_state() -> Dict[str, Optional[str]]:
     except Exception:
         logger.exception("Не удалось прочитать state-файл.")
     return {}
- 
- 
+
+
 def save_state(state: Dict[str, Optional[str]]) -> None:
     STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
- 
- 
+
+
 def get_entry_field(entry: Any, *keys: str) -> Optional[str]:
     for k in keys:
         v = entry.get(k) if isinstance(entry, dict) else None
         if v:
             return str(v).strip()
     return None
- 
- 
+
+
 def entry_to_item(entry: Any, source_name: str) -> Optional[NewsItem]:
     title = get_entry_field(entry, "title")
     link = get_entry_field(entry, "link", "links", "id")
@@ -228,12 +235,12 @@ def entry_to_item(entry: Any, source_name: str) -> Optional[NewsItem]:
     raw_id = f"{source_name}|{title}|{link}"
     key = _make_key(raw_id)
     return NewsItem(key=key, title=title, link=link, source_name=source_name, image_url=image_url, summary=summary)
- 
- 
+
+
 async def fetch_feed(url: str) -> Any:
     return await asyncio.to_thread(feedparser.parse, url)
- 
- 
+
+
 def extract_unseen_items(
     items_newest_first: List[NewsItem],
     last_seen_key: Optional[str],
@@ -248,8 +255,8 @@ def extract_unseen_items(
     idx = current_keys.index(last_seen_key)
     unseen_newest = items_newest_first[:idx]
     return list(reversed(unseen_newest))
- 
- 
+
+
 # =========================
 # Публикация
 # =========================
@@ -258,20 +265,20 @@ async def publish_item(item: NewsItem, bot: Bot) -> None:
     translated_summary = None
     if item.summary:
         translated_summary = await translate_to_russian(item.summary)
- 
+
     caption = format_post(item, translated_title, translated_summary)
     photo = item.custom_photo or item.image_url
- 
+
     if photo:
         try:
-            await bot.send_photo(CHANNEL_ID, photo=photo, caption=caption, parse_mode="Markdown")
+            await bot.send_photo(CHANNEL_ID, photo=photo, caption=caption)
             return
         except Exception:
             logger.exception("Не удалось отправить фото, отправляем текст.")
- 
-    await bot.send_message(CHANNEL_ID, caption, parse_mode="Markdown")
- 
- 
+
+    await bot.send_message(CHANNEL_ID, caption)
+
+
 # =========================
 # Handlers
 # =========================
@@ -280,8 +287,8 @@ async def safe_clear_keyboard(callback: CallbackQuery) -> None:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
- 
- 
+
+
 async def handle_publish(callback: CallbackQuery, bot: Bot) -> None:
     data = callback.data or ""
     _, key = data.split(":", 1)
@@ -295,8 +302,8 @@ async def handle_publish(callback: CallbackQuery, bot: Bot) -> None:
         PENDING.pop(key, None)
     await callback.answer("Опубликовано ✅")
     await safe_clear_keyboard(callback)
- 
- 
+
+
 async def handle_skip(callback: CallbackQuery) -> None:
     data = callback.data or ""
     _, key = data.split(":", 1)
@@ -304,8 +311,8 @@ async def handle_skip(callback: CallbackQuery) -> None:
         PENDING.pop(key, None)
     await callback.answer("Пропущено")
     await safe_clear_keyboard(callback)
- 
- 
+
+
 async def handle_photo_request(callback: CallbackQuery, state: FSMContext) -> None:
     data = callback.data or ""
     _, key = data.split(":", 1)
@@ -313,8 +320,8 @@ async def handle_photo_request(callback: CallbackQuery, state: FSMContext) -> No
     await state.set_state(EditStates.waiting_for_photo)
     await callback.message.answer("📷 Отправь фото для этой новости:")
     await callback.answer()
- 
- 
+
+
 async def handle_photo_received(message: Message, state: FSMContext, bot: Bot) -> None:
     data = await state.get_data()
     key = data.get("pending_key")
@@ -333,8 +340,8 @@ async def handle_photo_received(message: Message, state: FSMContext, bot: Bot) -
             )
     await state.clear()
     await message.answer("✅ Фото добавлено! Теперь нажми 'Опубликовать'.")
- 
- 
+
+
 async def handle_edittitle_request(callback: CallbackQuery, state: FSMContext) -> None:
     data = callback.data or ""
     _, key = data.split(":", 1)
@@ -342,8 +349,8 @@ async def handle_edittitle_request(callback: CallbackQuery, state: FSMContext) -
     await state.set_state(EditStates.waiting_for_title)
     await callback.message.answer("✏️ Напиши новый заголовок:")
     await callback.answer()
- 
- 
+
+
 async def handle_title_received(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     key = data.get("pending_key")
@@ -361,8 +368,8 @@ async def handle_title_received(message: Message, state: FSMContext) -> None:
             )
     await state.clear()
     await message.answer("✅ Заголовок изменён! Теперь нажми 'Опубликовать'.")
- 
- 
+
+
 async def handle_comment_request(callback: CallbackQuery, state: FSMContext) -> None:
     data = callback.data or ""
     _, key = data.split(":", 1)
@@ -370,8 +377,8 @@ async def handle_comment_request(callback: CallbackQuery, state: FSMContext) -> 
     await state.set_state(EditStates.waiting_for_comment)
     await callback.message.answer("💬 Напиши свой комментарий к новости:")
     await callback.answer()
- 
- 
+
+
 async def handle_comment_received(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     key = data.get("pending_key")
@@ -389,8 +396,8 @@ async def handle_comment_received(message: Message, state: FSMContext) -> None:
             )
     await state.clear()
     await message.answer("✅ Комментарий добавлен! Теперь нажми 'Опубликовать'.")
- 
- 
+
+
 # =========================
 # RSS polling
 # =========================
@@ -403,8 +410,8 @@ async def poll_loop(bot: Bot) -> None:
         except Exception:
             logger.exception("Ошибка во время проверки RSS.")
         await asyncio.sleep(20)
- 
- 
+
+
 async def poll_once(bot: Bot, state: Dict[str, Optional[str]]) -> None:
     for source in NEWS_SOURCES:
         source_name = source["name"]
@@ -432,8 +439,11 @@ async def poll_once(bot: Bot, state: Dict[str, Optional[str]]) -> None:
             async with PENDING_LOCK:
                 PENDING[item.key] = item
             translated_title = await translate_to_russian(item.title)
+            translated_summary_preview = None
+            if item.summary:
+                translated_summary_preview = await translate_to_russian(item.summary)
             image_info = "🖼 Есть картинка" if item.image_url else "📄 Без картинки"
-            summary_info = f"\n\n📝 {item.summary[:150]}..." if item.summary else ""
+            summary_info = f"\n\n📝 {translated_summary_preview[:150]}..." if translated_summary_preview else ""
             preview_text = (
                 f"📰 Новая новость! {image_info}\n\n"
                 f"🇬🇧 {item.title}\n"
@@ -446,8 +456,8 @@ async def poll_once(bot: Bot, state: Dict[str, Optional[str]]) -> None:
             state[source_name] = item.key
             save_state(state)
             logger.info("Отправлено администратору: %s", item.title)
- 
- 
+
+
 # =========================
 # Запуск
 # =========================
@@ -455,69 +465,66 @@ async def main() -> None:
     bot = Bot(token=TOKEN)
     await bot.delete_webhook(drop_pending_updates=True)
     logger.info("Webhook удален")
- 
+
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
- 
-    # Publish
+
     @dp.callback_query(F.data.startswith("publish:"))
     async def _publish_cb(callback: CallbackQuery) -> None:
         if callback.from_user and callback.from_user.id != ADMIN_ID:
             await callback.answer("Только администратор.", show_alert=True)
             return
         await handle_publish(callback, bot)
- 
-    # Skip
+
     @dp.callback_query(F.data.startswith("skip:"))
     async def _skip_cb(callback: CallbackQuery) -> None:
         if callback.from_user and callback.from_user.id != ADMIN_ID:
             await callback.answer("Только администратор.", show_alert=True)
             return
         await handle_skip(callback)
- 
-    # Photo
+
     @dp.callback_query(F.data.startswith("photo:"))
     async def _photo_cb(callback: CallbackQuery, state: FSMContext) -> None:
         if callback.from_user and callback.from_user.id != ADMIN_ID:
             await callback.answer("Только администратор.", show_alert=True)
             return
         await handle_photo_request(callback, state)
- 
+
     @dp.message(EditStates.waiting_for_photo, F.photo)
     async def _photo_received(message: Message, state: FSMContext) -> None:
         await handle_photo_received(message, state, bot)
- 
-    # Edit title
+
     @dp.callback_query(F.data.startswith("edittitle:"))
     async def _edittitle_cb(callback: CallbackQuery, state: FSMContext) -> None:
         if callback.from_user and callback.from_user.id != ADMIN_ID:
             await callback.answer("Только администратор.", show_alert=True)
             return
         await handle_edittitle_request(callback, state)
- 
+
     @dp.message(EditStates.waiting_for_title, F.text)
     async def _title_received(message: Message, state: FSMContext) -> None:
         await handle_title_received(message, state)
- 
-    # Comment
+
     @dp.callback_query(F.data.startswith("comment:"))
     async def _comment_cb(callback: CallbackQuery, state: FSMContext) -> None:
         if callback.from_user and callback.from_user.id != ADMIN_ID:
             await callback.answer("Только администратор.", show_alert=True)
             return
         await handle_comment_request(callback, state)
- 
+
     @dp.message(EditStates.waiting_for_comment, F.text)
     async def _comment_received(message: Message, state: FSMContext) -> None:
         await handle_comment_received(message, state)
- 
+
     rss_task = asyncio.create_task(poll_loop(bot))
     try:
         logger.info("Запуск long-polling Telegram.")
         await dp.start_polling(bot)
     finally:
         rss_task.cancel()
- 
- 
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 if __name__ == "__main__":
     asyncio.run(main())
