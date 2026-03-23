@@ -195,8 +195,8 @@ def extract_summary(entry: Any) -> Optional[str]:
     summary = getattr(entry, "summary", None) or getattr(entry, "description", None)
     if summary:
         cleaned = clean_html(summary)
-        if len(cleaned) > 300:
-            cleaned = cleaned[:300].rsplit(' ', 1)[0] + "..."
+        if len(cleaned) > 1000:
+            cleaned = cleaned[:1000].rsplit(' ', 1)[0] + "..."
         return cleaned if cleaned else None
     return None
 
