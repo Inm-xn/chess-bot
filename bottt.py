@@ -127,7 +127,7 @@ def get_hashtags(source_name: str) -> str:
 
 def escape_markdown(text: str) -> str:
     """Убирает спецсимволы Markdown чтобы не ломался форматирование."""
-    chars = ['*', '_', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    chars = ['*', '_', '`']
     for ch in chars:
         text = text.replace(ch, '')
     return text
